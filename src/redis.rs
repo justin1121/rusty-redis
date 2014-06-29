@@ -8,6 +8,21 @@ enum Global {
   RedisReaderMaxBuf = 1024 * 16
 }
 
+#[deriving(Clone)]
+pub enum RedisReply {
+  RedisString(String),
+  RedisInteger(int),
+  RedisNil,
+  RedisStatus(String),
+  RedisError(String)
+}
+
+enum RedisError {
+  RedisNoError,
+  RedisIoError,
+  RedisProcessError
+}
+
 struct RedisReadTask {
   kind: int,
   elm: int,
@@ -16,20 +31,18 @@ struct RedisReadTask {
 }
 
 struct RedisReader {
-  err: int,
+  err: RedisError,
   errstr: String,
   buf: String,
-  reply: String,
+  reply: RedisReply,
   pos: int,
   len: int,
-  maxbuf: Global,
-  
   rstack: [RedisReadTask, ..9],
   ridx: int
 }
 
 pub struct RedisContext {
-  err: int,
+  err: RedisError,
   errstr: String,
   tcpstream: TcpStream,
   flags: int, 
@@ -49,14 +62,13 @@ impl RedisReadTask {
 }
 
 impl RedisReader {
-
-  fn process_item(&self) ->Result<(), String> {
+  fn process_item(&self) -> Result<(), String> {
     unimplemented!();
   }
 
-  fn process_reply(&mut self) -> Result<(), String> {
+  fn process_reply(&mut self) -> Result<Option<RedisReply>, String> {
     if self.len == 0 {
-      return Ok(()) 
+      return Ok(Some(RedisNil)) 
     }
 
     if self.ridx == -1 {
@@ -64,15 +76,14 @@ impl RedisReader {
     }
 
     while self.ridx >= 0 {
-      try!(self.process_item()); 
+      match self.process_item(){
+        Err(s) => { self.set_error(RedisProcessError, s.as_slice()); return Err(s) },
+        _ => ()
+      }
     }
     
-    Ok(())
+    Ok(Some(self.reply.clone()))
   }
-
-  //fn get_reply(&mut self) -> Option<String> {
-  //  Some(self.reply)
-  //}
 
   fn feed(&mut self, buf: &mut [u8], len: uint){
     let mut i = 0;
@@ -84,15 +95,19 @@ impl RedisReader {
     println!("{}", self.buf);
   }
 
+  fn set_error(&mut self, err: RedisError, errstr: &str){
+    self.err = err;
+    self.errstr = errstr.to_str();
+  }
+
   fn new() -> RedisReader {
     RedisReader {
-      err: 0,
+      err: RedisNoError,
       errstr: String::new(),
       buf: String::new(),
-      reply: String::new(),
+      reply: RedisNil,
       pos: 0,
       len: 0,
-      maxbuf: RedisReaderMaxBuf,
       rstack: [RedisReadTask::new(),
                RedisReadTask::new(),
                RedisReadTask::new(),
@@ -129,20 +144,19 @@ impl RedisContext {
     finalc
   }
 
-  fn set_error(&mut self, err: int, errstr: &str){
+  fn set_error(&mut self, err: RedisError, errstr: &str){
     self.err = err;
     self.errstr = errstr.to_str();
   }
 
-  fn get_reply_reader(&mut self) -> Result<Option<String>, String> {
-    //self.reader.get_reply();
-    Err("ERR".to_str())
+  fn get_reply_reader(&mut self) -> Result<Option<RedisReply>, String> {
+    self.reader.process_reply()
   }
 
   fn buffer_write(&mut self) -> int {
     println!("{}", self.obuf);
     match self.tcpstream.write_str(self.obuf.as_slice()){
-      Err(e) => { self.set_error(1, e.desc ); 1 }
+      Err(e) => { self.set_error(RedisIoError, e.desc ); 1 }
       _ => 0
     }
   }
@@ -152,12 +166,12 @@ impl RedisContext {
     let res = self.tcpstream.read(buf);
     match res {
       Ok(s) => { self.reader.feed(buf, s); 0 },
-      Err(e) => { self.set_error(1, e.desc); 1 }
+      Err(e) => { self.set_error(RedisIoError, e.desc); 1 }
     }
 
   }
 
-  fn block_for_reply(&mut self) -> Result<Option<String>, String> {
+  fn block_for_reply(&mut self) -> Result<Option<RedisReply>, String> {
     let o = try!(self.get_reply_reader());
     match o {
       Some(s) => Ok(Some(s)),
@@ -175,7 +189,7 @@ impl RedisContext {
 
   pub fn connect(ip: &str, port: u16) -> RedisContext {
     RedisContext {
-      err: 0,
+      err: RedisNoError,
       errstr: String::new(),
       tcpstream: match TcpStream::connect(ip, port) {
         Ok(s) => s,
@@ -187,14 +201,9 @@ impl RedisContext {
     }
   }
 
-  pub fn command(&mut self, command: &str) -> Result<Option<String>, String> {
+  pub fn command(&mut self, command: &str) -> Result<Option<RedisReply>, String> {
     self.obuf = self.format_command(command);
-    let r = try!(self.block_for_reply());
-    
-    match r {
-      Some(s) => { println!("{}", s); Ok(Some(s)) }
-      None => { println!("Error!"); Err("Error".to_str()) }
-    }
+    self.block_for_reply()
   }
 }
 
