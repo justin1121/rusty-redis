@@ -3,15 +3,27 @@
 #![crate_type = "lib"]
 
 use std::io::net::tcp::TcpStream;
+use std::io::BufReader;
+use std::int::parse_bytes;
 
 enum Global {
   RedisReaderMaxBuf = 1024 * 16
 }
 
+enum RedisReplyType {
+  RedisReplyString,
+  RedisReplyInteger,
+  RedisReplyArray,
+  RedisReplyNil,
+  RedisReplyStatus,
+  RedisReplyError
+}
+
 #[deriving(Clone)]
-pub enum RedisReply {
+pub enum RedisObject {
   RedisString(String),
   RedisInteger(int),
+  RedisArray(Vec<RedisObject>),
   RedisNil,
   RedisStatus(String),
   RedisError(String)
@@ -24,19 +36,19 @@ enum RedisError {
 }
 
 struct RedisReadTask {
-  kind: int,
+  kind: RedisReplyType,
   elm: int,
   idx: int,
-  obj: String, // this prob isn't right
+  obj: RedisObject
 }
 
 struct RedisReader {
   err: RedisError,
   errstr: String,
   buf: String,
-  reply: RedisReply,
-  pos: int,
-  len: int,
+  reply: RedisObject,
+  pos: uint,
+  len: uint,
   rstack: [RedisReadTask, ..9],
   ridx: int
 }
@@ -53,22 +65,84 @@ pub struct RedisContext {
 impl RedisReadTask {
   fn new() -> RedisReadTask {
     RedisReadTask {
-      kind: -1,
+      kind: RedisReplyNil,
       elm: -1,
       idx: -1,
-      obj: String::new(),
+      obj: RedisNil,
     }
   }
 }
 
 impl RedisReader {
-  fn process_item(&self) -> Result<(), String> {
+  fn create_integer(&self, s: &str) -> Result<RedisObject, &str> {
+    match parse_bytes(s.as_bytes(), 10) {
+      Some(n) => Ok(RedisInteger(n)),
+      None => Err("Invalid integer for create_integer")
+    }
+  }
+
+  fn process_line_item(&mut self) -> Result<(), &str> {
+    let mut reader = BufReader::new(self.buf.as_bytes());
+
+    match reader.read_line() {
+      Ok(s) => {
+        let mut ns = s.clone();
+        ns.shift_char(); // this is dirty and quick
+        let nns = ns.as_slice().trim();
+
+        match self.rstack[self.ridx as uint].kind {
+          RedisReplyStatus => self.reply = RedisStatus(nns.to_str()),
+          RedisReplyError => self.reply = RedisError(nns.to_str()),
+          RedisReplyInteger => match self.create_integer(nns) {
+            Ok(n) => self.reply = n,
+            Err(e) => return Err(e)
+          },
+          _ => return Err("Invalid type for process_line_item")
+        };
+        Ok(())
+      },
+      Err(e) => Err(e.desc)
+    }
+  }
+
+  fn process_bulk_item(&mut self) -> Result<(), &str> {
+    unimplemented!();
+  }
+  
+  fn process_multi_bulk_item(&mut self) -> Result<(), &str> {
     unimplemented!();
   }
 
-  fn process_reply(&mut self) -> Result<Option<RedisReply>, String> {
+  fn process_item(&mut self) -> Result<(), &str> {
+    match self.rstack[self.ridx as uint].kind {
+      RedisReplyError => self.process_line_item(),
+      RedisReplyStatus => self.process_line_item(),
+      RedisReplyInteger => self.process_line_item(),
+      RedisReplyString => self.process_bulk_item(), 
+      RedisReplyArray => self.process_multi_bulk_item(),
+      _ => Err("This should never happen")
+    }
+  }
+
+  fn check_reply_type(&mut self) -> Result<(), &str> {
+    let mut kind: RedisReplyType;
+    let slice = self.buf.as_slice();
+    match slice.char_at(0) {
+      '-' => kind = RedisReplyError,
+      '+' => kind = RedisReplyStatus,
+      ':' => kind = RedisReplyInteger,
+      '$' => kind = RedisReplyString,
+      '*' => kind = RedisReplyArray,
+      _ =>  return Err("Failed reading control byte")
+    }
+
+    self.rstack[self.ridx as uint].kind = kind;
+    Ok(())
+  }
+
+  fn process_reply(&mut self) -> Result<Option<RedisObject>, &str> {
     if self.len == 0 {
-      return Ok(Some(RedisNil)) 
+      return Ok(None) 
     }
 
     if self.ridx == -1 {
@@ -76,12 +150,15 @@ impl RedisReader {
     }
 
     while self.ridx >= 0 {
-      match self.process_item(){
-        Err(s) => { self.set_error(RedisProcessError, s.as_slice()); return Err(s) },
-        _ => ()
+      match self.check_reply_type(){
+        Err(s) => { self.set_error(RedisProcessError, s); return Err(s) },
+        _ => match self.process_item() {
+               Err(s) => { self.set_error(RedisProcessError, s); return Err(s) },
+               _ => self.ridx = self.ridx - 1
+             }
       }
     }
-    
+
     Ok(Some(self.reply.clone()))
   }
 
@@ -92,7 +169,7 @@ impl RedisReader {
       self.buf.push_char(c.to_char());
       i = i + 1;
     }
-    println!("{}", self.buf);
+    self.len = len;
   }
 
   fn set_error(&mut self, err: RedisError, errstr: &str){
@@ -149,12 +226,11 @@ impl RedisContext {
     self.errstr = errstr.to_str();
   }
 
-  fn get_reply_reader(&mut self) -> Result<Option<RedisReply>, String> {
+  fn get_reply_reader(&mut self) -> Result<Option<RedisObject>, &str> {
     self.reader.process_reply()
   }
 
   fn buffer_write(&mut self) -> int {
-    println!("{}", self.obuf);
     match self.tcpstream.write_str(self.obuf.as_slice()){
       Err(e) => { self.set_error(RedisIoError, e.desc ); 1 }
       _ => 0
@@ -171,7 +247,7 @@ impl RedisContext {
 
   }
 
-  fn block_for_reply(&mut self) -> Result<Option<RedisReply>, String> {
+  fn block_for_reply(&mut self) -> Result<Option<RedisObject>, &str> {
     let o = try!(self.get_reply_reader());
     match o {
       Some(s) => Ok(Some(s)),
@@ -181,7 +257,7 @@ impl RedisContext {
         let o2 = try!(self.get_reply_reader());
         match o2{
           Some(s) => Ok(Some(s)),
-          None => Err("Error".to_str())
+          None => Err("No reply was found")
         }
       }
     }
@@ -201,7 +277,7 @@ impl RedisContext {
     }
   }
 
-  pub fn command(&mut self, command: &str) -> Result<Option<RedisReply>, String> {
+  pub fn command(&mut self, command: &str) -> Result<Option<RedisObject>, &str> {
     self.obuf = self.format_command(command);
     self.block_for_reply()
   }
