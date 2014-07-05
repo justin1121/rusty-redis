@@ -45,9 +45,9 @@ struct RedisReadTask {
 struct RedisReader {
   err: RedisError,
   errstr: String,
-  buf: String,
+  buf: String, //this probably needs to be changed somehow
   reply: RedisObject,
-  pos: uint,
+  pos: uint, //might be needed in future, with dealing with multiple replies
   len: uint,
   rstack: [RedisReadTask, ..9],
   ridx: int
@@ -57,7 +57,7 @@ pub struct RedisContext {
   err: RedisError,
   errstr: String,
   tcpstream: TcpStream,
-  flags: int, 
+  flags: int, // async flag?
   obuf: String,
   reader: RedisReader
 }
@@ -87,7 +87,7 @@ impl RedisReader {
     match reader.read_line() {
       Ok(s) => {
         let mut ns = s.clone();
-        ns.shift_char(); // this is dirty and quick
+        ns.shift_char(); // this is dirty and quick...well slow O(n)
         let nns = ns.as_slice().trim();
 
         match self.rstack[self.ridx as uint].kind {
@@ -158,7 +158,8 @@ impl RedisReader {
              }
       }
     }
-
+    self.buf.truncate(0);
+    self.len = 0;
     Ok(Some(self.reply.clone()))
   }
 
@@ -226,23 +227,30 @@ impl RedisContext {
     self.errstr = errstr.to_str();
   }
 
+  fn check_error(&self) -> bool {  
+    match self.err {
+      RedisNoError => true,
+      _ => true 
+    }
+  }
+
   fn get_reply_reader(&mut self) -> Result<Option<RedisObject>, &str> {
     self.reader.process_reply()
   }
 
-  fn buffer_write(&mut self) -> int {
+  fn buffer_write(&mut self) {
     match self.tcpstream.write_str(self.obuf.as_slice()){
-      Err(e) => { self.set_error(RedisIoError, e.desc ); 1 }
-      _ => 0
+      Err(e) => { self.set_error(RedisIoError, e.desc ); }
+      _ => ()
     }
   }
 
-  fn buffer_read(&mut self) -> int {
+  fn buffer_read(&mut self) {
     let mut buf = [0, ..RedisReaderMaxBuf as uint];
     let res = self.tcpstream.read(buf);
     match res {
-      Ok(s) => { self.reader.feed(buf, s); 0 },
-      Err(e) => { self.set_error(RedisIoError, e.desc); 1 }
+      Ok(s) => { self.reader.feed(buf, s); },
+      Err(e) => { self.set_error(RedisIoError, e.desc); }
     }
 
   }
@@ -254,10 +262,14 @@ impl RedisContext {
       None => {
         self.buffer_write();
         self.buffer_read();
+
+        if self.check_error() {
+          return Err("Error. Check error members.");
+        }
         let o2 = try!(self.get_reply_reader());
         match o2{
           Some(s) => Ok(Some(s)),
-          None => Err("No reply was found")
+          None => Err("No reply was found. Check error members.")
         }
       }
     }
@@ -280,6 +292,31 @@ impl RedisContext {
   pub fn command(&mut self, command: &str) -> Result<Option<RedisObject>, &str> {
     self.obuf = self.format_command(command);
     self.block_for_reply()
+  }
+}
+
+#[cfg(test)]
+mod test {
+  #[test]
+  fn test_connect(){
+    let c = ::RedisContext::connect("127.0.0.1", 6379);
+  }
+
+  #[test]
+  fn test_command(){
+    let mut c = ::RedisContext::connect("127.0.0.1", 6379);
+    let r = c.command("PING");
+
+    match r {
+      Ok(s) => match s {
+        Some(s) => match s {
+          ::RedisStatus(s) => assert!(s.eq(&"PONG".to_str())),
+          _ => fail!("Didn't return correct reply type.")
+        },
+        None => fail!("Didn't return anything.")
+      }, 
+      Err(e) => fail!("{}", e)
+    }
   }
 }
 
