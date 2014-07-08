@@ -1,10 +1,15 @@
-#![crate_id = "rustyredis#0.1"]
+#![crate_name = "rustyredis"]
 #![desc = "A Rust client library for Redis based off hiredis"]
 #![crate_type = "lib"]
 
 use std::io::net::tcp::TcpStream;
 use std::io::BufReader;
 use std::int::parse_bytes;
+
+// TODO: might need custom parse_bytes
+// TODO: need custom readline for bulk items
+// TODO: redo format and args, not quite right
+//       can't just assume every space is an arg
 
 enum Global {
   RedisReaderMaxBuf = 1024 * 16
@@ -81,13 +86,26 @@ impl RedisReader {
     }
   }
 
+  fn create_string(&self, mut buf: BufReader, len: uint) -> Result<RedisObject, &str> {
+    match buf.read_to_str() {
+      Ok(s) => {
+        if len + 2 != s.len() { // include \r\n
+          return Err("Invalid string for create_string: lengths do not matchup");
+        }
+        let ns = s.as_slice().trim();
+        Ok(RedisString(ns.to_str()))
+      },
+      Err(_) => Err("Invalid string for create_string") // would be nice to not ignore this error
+    }
+  }
+
   fn process_line_item(&mut self) -> Result<(), &str> {
     let mut reader = BufReader::new(self.buf.as_bytes());
 
+    reader.consume(1);
     match reader.read_line() {
       Ok(s) => {
-        let mut ns = s.clone();
-        ns.shift_char(); // this is dirty and quick...well slow O(n)
+        let ns = s.clone();
         let nns = ns.as_slice().trim();
 
         match self.rstack[self.ridx as uint].kind {
@@ -106,7 +124,39 @@ impl RedisReader {
   }
 
   fn process_bulk_item(&mut self) -> Result<(), &str> {
-    unimplemented!();
+    let mut reader = BufReader::new(self.buf.as_bytes());
+
+    reader.consume(1);
+    match reader.read_line() {
+      Ok(s) => {
+        let ns = s.clone();
+        let nns = ns.as_slice().trim();
+        let mut len: int;
+        match parse_bytes(nns.as_bytes(), 10){
+          Some(n) => {
+            if n == -1{
+              len = -1;
+              self.rstack[self.ridx as uint].kind = RedisReplyNil;
+            }
+            else{
+              len = n;
+            }
+          },
+          None => { return Err("Invalid length in reply for process_bulk_item") }
+        };
+
+        match self.rstack[self.ridx as uint].kind {
+          RedisReplyString => match self.create_string(reader, len as uint) {
+            Ok(s) => self.reply = s,
+            Err(e) => return Err(e)
+          },
+          RedisReplyNil => self.reply = RedisNil,
+          _ => return Err("Invalid type for process_bulk_item")
+        }
+        Ok(())
+      }
+      Err(e) => Err(e.desc)
+    }
   }
   
   fn process_multi_bulk_item(&mut self) -> Result<(), &str> {
@@ -229,7 +279,7 @@ impl RedisContext {
 
   fn check_error(&self) -> bool {  
     match self.err {
-      RedisNoError => true,
+      RedisNoError => false,
       _ => true 
     }
   }
@@ -316,6 +366,52 @@ mod test {
         None => fail!("Didn't return anything.")
       }, 
       Err(e) => fail!("{}", e)
+    }
+  }
+
+  #[test]
+  fn test_reply_types() {
+    // Integer
+    let mut c = ::RedisContext::connect("127.0.0.1", 6379);
+    let r = c.command("APPEND mykey test");
+
+    match r {
+      Ok(i) => match i {
+        Some(i) => match i {
+          ::RedisInteger(i) => assert!(i == 4),
+          _ => fail!("INTEGER: Didn't return correct reply type.")
+        },
+        None => fail!("INTEGER: Didn't return anything.")
+      },
+      Err(e) => fail!("INTEGER: {}", e)
+    }
+
+    // String
+    let r = c.command("GET mykey");
+
+    match r {
+      Ok(s) => match s {
+        Some(s) => match s {
+          ::RedisString(s) => assert!(s.eq(&"test".to_str())),
+          _ => fail!("STRING: Didn't return correct reply type.")
+        },
+        None => fail!("STRING: Didn't return anything.")
+      },
+      Err(e) => fail!("{}", e)
+    }
+
+    // cleanup
+    let r = c.command("DEL mykey");
+
+    match r {
+      Ok(i) => match i {
+        Some(i) => match i {
+          ::RedisInteger(i) => assert!(i == 1),
+          _ => fail!("DELETE FAILED for test_process_bulk_item")
+        },
+        None => fail!("DELETE FAILED for test_procoess_bulk_item")
+      },
+      Err(_) => fail!("DELETE FAILED for test_process_bulk_item")
     }
   }
 }
