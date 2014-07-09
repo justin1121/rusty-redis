@@ -8,8 +8,6 @@ use std::int::parse_bytes;
 
 // TODO: might need custom parse_bytes
 // TODO: need custom readline for bulk items
-// TODO: redo format and args, not quite right
-//       can't just assume every space is an arg
 
 enum Global {
   RedisReaderMaxBuf = 1024 * 16
@@ -251,17 +249,25 @@ impl RedisReader {
 }
 
 impl RedisContext {
-  fn format_command(&self, format: &str) -> String {
+  fn format_command(&self, cmd: &str, args: &[&str]) -> String {
     let mut argc: uint = 0;
     let mut c = String::new();
     let mut finalc = String::new();
 
-    for arg in format.split(' '){
-      let arglen = arg.len();
+    let mut len = cmd.len();
+    c = c.append("$");
+    c = c.append(len.to_str().as_slice());
+    c = c.append("\r\n");
+    c = c.append(cmd);
+    c = c.append("\r\n");
+    argc = argc + 1;
+
+    for arg in args.iter(){
+      len = arg.len();
       c = c.append("$");
-      c = c.append(arglen.to_str().as_slice());
+      c = c.append(len.to_str().as_slice());
       c = c.append("\r\n");
-      c = c.append(arg);
+      c = c.append(*arg);
       c = c.append("\r\n");
       argc = argc + 1;
     }
@@ -339,8 +345,8 @@ impl RedisContext {
     }
   }
 
-  pub fn command(&mut self, command: &str) -> Result<Option<RedisObject>, &str> {
-    self.obuf = self.format_command(command);
+  pub fn command(&mut self, cmd: &str, args: &[&str]) -> Result<Option<RedisObject>, &str> {
+    self.obuf = self.format_command(cmd, args);
     self.block_for_reply()
   }
 }
@@ -349,13 +355,13 @@ impl RedisContext {
 mod test {
   #[test]
   fn test_connect(){
-    let c = ::RedisContext::connect("127.0.0.1", 6379);
+    let _ = ::RedisContext::connect("127.0.0.1", 6379);
   }
 
   #[test]
   fn test_command(){
     let mut c = ::RedisContext::connect("127.0.0.1", 6379);
-    let r = c.command("PING");
+    let r = c.command("PING", []);
 
     match r {
       Ok(s) => match s {
@@ -373,7 +379,7 @@ mod test {
   fn test_reply_types() {
     // Integer
     let mut c = ::RedisContext::connect("127.0.0.1", 6379);
-    let r = c.command("APPEND mykey test");
+    let r = c.command("APPEND", ["mykey", "test"]);
 
     match r {
       Ok(i) => match i {
@@ -387,7 +393,7 @@ mod test {
     }
 
     // String
-    let r = c.command("GET mykey");
+    let r = c.command("GET", ["mykey"]);
 
     match r {
       Ok(s) => match s {
@@ -401,7 +407,7 @@ mod test {
     }
 
     // cleanup
-    let r = c.command("DEL mykey");
+    let r = c.command("DEL", ["mykey"]);
 
     match r {
       Ok(i) => match i {
