@@ -4,7 +4,7 @@
 
 use std::io::net::tcp::TcpStream;
 use std::io::BufReader;
-use std::int::parse_bytes;
+use std::i64::parse_bytes;
 
 // TODO: might need custom parse_bytes
 // TODO: need custom readline for bulk items
@@ -25,7 +25,7 @@ enum RedisReplyType {
 #[deriving(Clone)]
 pub enum RedisObject {
   RedisString(String),
-  RedisInteger(int),
+  RedisInteger(i64),
   RedisArray(Vec<RedisObject>),
   RedisNil,
   RedisStatus(String),
@@ -85,13 +85,13 @@ impl RedisReader {
   }
 
   fn create_string(&self, mut buf: BufReader, len: uint) -> Result<RedisObject, &str> {
-    match buf.read_to_str() {
+    match buf.read_to_string() {
       Ok(s) => {
         if len + 2 != s.len() { // include \r\n
           return Err("Invalid string for create_string: lengths do not matchup");
         }
         let ns = s.as_slice().trim();
-        Ok(RedisString(ns.to_str()))
+        Ok(RedisString(ns.to_string()))
       },
       Err(_) => Err("Invalid string for create_string") // would be nice to not ignore this error
     }
@@ -107,8 +107,8 @@ impl RedisReader {
         let nns = ns.as_slice().trim();
 
         match self.rstack[self.ridx as uint].kind {
-          RedisReplyStatus => self.reply = RedisStatus(nns.to_str()),
-          RedisReplyError => self.reply = RedisError(nns.to_str()),
+          RedisReplyStatus => self.reply = RedisStatus(nns.to_string()),
+          RedisReplyError => self.reply = RedisError(nns.to_string()),
           RedisReplyInteger => match self.create_integer(nns) {
             Ok(n) => self.reply = n,
             Err(e) => return Err(e)
@@ -129,22 +129,21 @@ impl RedisReader {
       Ok(s) => {
         let ns = s.clone();
         let nns = ns.as_slice().trim();
-        let mut len: int;
+        let mut len: uint = 0;
         match parse_bytes(nns.as_bytes(), 10){
           Some(n) => {
             if n == -1{
-              len = -1;
               self.rstack[self.ridx as uint].kind = RedisReplyNil;
             }
             else{
-              len = n;
+              len = n as uint;
             }
           },
           None => { return Err("Invalid length in reply for process_bulk_item") }
         };
 
         match self.rstack[self.ridx as uint].kind {
-          RedisReplyString => match self.create_string(reader, len as uint) {
+          RedisReplyString => match self.create_string(reader, len) {
             Ok(s) => self.reply = s,
             Err(e) => return Err(e)
           },
@@ -223,7 +222,7 @@ impl RedisReader {
 
   fn set_error(&mut self, err: RedisError, errstr: &str){
     self.err = err;
-    self.errstr = errstr.to_str();
+    self.errstr = errstr.to_string();
   }
 
   fn new() -> RedisReader {
@@ -256,7 +255,7 @@ impl RedisContext {
 
     let mut len = cmd.len();
     c = c.append("$");
-    c = c.append(len.to_str().as_slice());
+    c = c.append(len.to_string().as_slice());
     c = c.append("\r\n");
     c = c.append(cmd);
     c = c.append("\r\n");
@@ -265,14 +264,14 @@ impl RedisContext {
     for arg in args.iter(){
       len = arg.len();
       c = c.append("$");
-      c = c.append(len.to_str().as_slice());
+      c = c.append(len.to_string().as_slice());
       c = c.append("\r\n");
       c = c.append(*arg);
       c = c.append("\r\n");
       argc = argc + 1;
     }
     finalc = finalc.append("*");
-    finalc = finalc.append(argc.to_str().as_slice());
+    finalc = finalc.append(argc.to_string().as_slice());
     finalc = finalc.append("\r\n");
     finalc = finalc.append(c.as_slice());
     finalc
@@ -280,7 +279,7 @@ impl RedisContext {
 
   fn set_error(&mut self, err: RedisError, errstr: &str){
     self.err = err;
-    self.errstr = errstr.to_str();
+    self.errstr = errstr.to_string();
   }
 
   fn check_error(&self) -> bool {  
@@ -366,7 +365,7 @@ mod test {
     match r {
       Ok(s) => match s {
         Some(s) => match s {
-          ::RedisStatus(s) => assert!(s.eq(&"PONG".to_str())),
+          ::RedisStatus(s) => assert!(s.eq(&"PONG".to_string())),
           _ => fail!("Didn't return correct reply type.")
         },
         None => fail!("Didn't return anything.")
@@ -413,11 +412,28 @@ mod test {
       Ok(i) => match i {
         Some(i) => match i {
           ::RedisInteger(i) => assert!(i == 1),
-          _ => fail!("DELETE FAILED for test_process_bulk_item")
+          _ => fail!("DELETE: cleanup failed")
         },
-        None => fail!("DELETE FAILED for test_procoess_bulk_item")
+        None => fail!("DELETE: cleanup failed")
       },
-      Err(_) => fail!("DELETE FAILED for test_process_bulk_item")
+      Err(_) => fail!("DELETE: cleanup failed")
+    }
+  }
+
+  #[test]
+  fn test_nil_reply() {
+    let mut context = ::RedisContext::connect("127.0.0.1", 6379);
+    let r = context.command("GET", ["nomykey"]);
+
+    match r {
+      Ok(s) => match s {
+        Some(s) => match s {
+          super::RedisNil => return,
+          _ => fail!("NIL: Didn't return correct reply type.")
+        },
+        None => fail!("NIL: Didn't return anything."),
+      },
+      Err(e) => fail!("{}", e)
     }
   }
 }
