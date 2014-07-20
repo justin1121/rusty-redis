@@ -3,7 +3,3 @@
 name = "rusty-redis"
 version = "0.1.0"
 authors = [ "justinpatriquin@gmail.com" ]
-
-[[lib]]
-
-name = "redis"
