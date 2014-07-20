@@ -6,7 +6,6 @@ use std::io::net::tcp::TcpStream;
 use std::io::BufReader;
 use std::i64::parse_bytes;
 
-// TODO: might need custom parse_bytes
 // TODO: need custom readline for bulk items
 
 enum Global {
