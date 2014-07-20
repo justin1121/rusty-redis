@@ -397,7 +397,7 @@ mod test {
     match r {
       Ok(s) => match s {
         Some(s) => match s {
-          ::RedisString(s) => assert!(s.eq(&"test".to_str())),
+          ::RedisString(s) => assert!(s.eq(&"test".to_string())),
           _ => fail!("STRING: Didn't return correct reply type.")
         },
         None => fail!("STRING: Didn't return anything.")
