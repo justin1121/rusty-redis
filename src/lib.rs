@@ -1,4 +1,4 @@
-#![crate_name = "rustyredis"]
+#![crate_name = "rusty-redis"]
 #![desc = "A Rust client library for Redis based off hiredis"]
 #![crate_type = "lib"]
 
@@ -154,7 +154,7 @@ impl RedisReader {
       Err(e) => Err(e.desc)
     }
   }
-  
+
   fn process_multi_bulk_item(&mut self) -> Result<(), &str> {
     unimplemented!();
   }
@@ -164,7 +164,7 @@ impl RedisReader {
       RedisReplyError => self.process_line_item(),
       RedisReplyStatus => self.process_line_item(),
       RedisReplyInteger => self.process_line_item(),
-      RedisReplyString => self.process_bulk_item(), 
+      RedisReplyString => self.process_bulk_item(),
       RedisReplyArray => self.process_multi_bulk_item(),
       _ => Err("This should never happen")
     }
@@ -188,7 +188,7 @@ impl RedisReader {
 
   fn process_reply(&mut self) -> Result<Option<RedisObject>, &str> {
     if self.len == 0 {
-      return Ok(None) 
+      return Ok(None)
     }
 
     if self.ridx == -1 {
@@ -281,10 +281,10 @@ impl RedisContext {
     self.errstr = errstr.to_string();
   }
 
-  fn check_error(&self) -> bool {  
+  fn check_error(&self) -> bool {
     match self.err {
       RedisNoError => false,
-      _ => true 
+      _ => true
     }
   }
 
@@ -368,7 +368,7 @@ mod test {
           _ => fail!("Didn't return correct reply type.")
         },
         None => fail!("Didn't return anything.")
-      }, 
+      },
       Err(e) => fail!("{}", e)
     }
   }
