@@ -1,4 +1,4 @@
-#![crate_name = "rusty-redis"]
+#![crate_name = "redis"]
 #![desc = "A Rust client library for Redis based off hiredis"]
 #![crate_type = "lib"]
 
@@ -9,6 +9,8 @@
 // TODO: high level commands?
 
 use std::io::net::tcp::TcpStream;
+
+#[cfg(test)]mod test;
 
 enum Global {
   RedisReaderMaxBuf = 1024 * 16
@@ -366,95 +368,9 @@ impl RedisContext {
     self.obuf = self.format_command(cmd, args);
     self.block_for_reply()
   }
-}
 
-#[cfg(test)]
-mod test {
-  #[test]
-  fn test_connect(){
-    let _ = ::RedisContext::connect("127.0.0.1", 6379);
-  }
-
-  #[test]
-  fn test_command(){
-    let mut c = ::RedisContext::connect("127.0.0.1", 6379);
-    let r = c.command("PING", []);
-
-    match r {
-      Ok(s) => match s {
-        Some(s) => match s {
-          ::RedisStatus(s) => assert!(s.eq(&"PONG".to_string())),
-          _ => fail!("Didn't return correct reply type.")
-        },
-        None => fail!("Didn't return anything.")
-      },
-      Err(e) => fail!("{}", e)
-    }
-  }
-
-  #[test]
-  fn test_reply_types() {
-    // Integer
-    let mut c = ::RedisContext::connect("127.0.0.1", 6379);
-    let r = c.command("APPEND", ["mykey", "te\nst"]);
-
-    match r {
-      Ok(i) => match i {
-        Some(i) => match i {
-          ::RedisInteger(i) => {
-            assert!(i == 5);
-          }
-          _ => fail!("INTEGER: Didn't return correct reply type.")
-        },
-        None => fail!("INTEGER: Didn't return anything.")
-      },
-      Err(e) => fail!("INTEGER: {}", e)
-    }
-
-    // String
-    let r = c.command("GET", ["mykey"]);
-
-    match r {
-      Ok(s) => match s {
-        Some(s) => match s {
-          ::RedisString(s) => assert!(s.eq(&"te\nst".to_string())),
-          _ => fail!("STRING: Didn't return correct reply type.")
-        },
-        None => fail!("STRING: Didn't return anything.")
-      },
-      Err(e) => fail!("{}", e)
-    }
-
-    // cleanup
-    let r = c.command("DEL", ["mykey"]);
-
-    match r {
-      Ok(i) => match i {
-        Some(i) => match i {
-          ::RedisInteger(i) => assert!(i == 1),
-          _ => fail!("DELETE: cleanup failed")
-        },
-        None => fail!("DELETE: cleanup failed")
-      },
-      Err(_) => fail!("DELETE: cleanup failed")
-    }
-  }
-
-  #[test]
-  fn test_nil_reply() {
-    let mut context = ::RedisContext::connect("127.0.0.1", 6379);
-    let r = context.command("GET", ["notmykey"]);
-
-    match r {
-      Ok(s) => match s {
-        Some(s) => match s {
-          super::RedisNil => return,
-          _ => fail!("NIL: Didn't return correct reply type.")
-        },
-        None => fail!("NIL: Didn't return anything."),
-      },
-      Err(e) => fail!("{}", e)
-    }
+  pub fn close(self) {
+    drop(self.tcpstream);
   }
 }
 
