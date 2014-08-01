@@ -93,7 +93,7 @@ fn test_nil_reply() {
   match r {
     Ok(s) => match s {
       Some(s) => match s {
-        ::RedisNil => return,
+        ::RedisNil => (),
         _ => fail!("NIL: Didn't return correct reply type.")
       },
       None => fail!("NIL: Didn't return anything."),
